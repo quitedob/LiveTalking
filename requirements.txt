@@ -42,3 +42,5 @@ accelerate
 librosa
 openai
 websockets==12.0
+
+funasr
