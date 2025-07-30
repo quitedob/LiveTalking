@@ -21,8 +21,7 @@ from aiortc import RTCPeerConnection, RTCSessionDescription,RTCIceServer,RTCConf
 from aiortc.rtcrtpsender import RTCRtpSender
 from webrtc import HumanPlayer
 from basereal import BaseReal
-# --- 修改：移除不再使用的 llm_response 导入 ---
-# from llm import llm_response
+from llm import llm_response
 
 import argparse
 import random
@@ -67,10 +66,9 @@ def build_nerfreal(sessionid:int)->BaseReal:
     elif opt.model == 'musetalk':
         from musereal import MuseReal
         nerfreal = MuseReal(opt,model,avatar)
-    elif opt.model == 'ernerf':
+    # elif opt.model == 'ernerf':
     #     from nerfreal import NeRFReal
     #     nerfreal = NeRFReal(opt,model,avatar)
-        pass
     elif opt.model == 'ultralight':
         from lightreal import LightReal
         nerfreal = LightReal(opt,model,avatar)
@@ -165,21 +163,8 @@ async def human(request):
 
         if params['type']=='echo':
             nerfreals[sessionid].put_msg_txt(params['text'])
-        # --- 核心修改：将 chat 功能的实现从 llm.py 切换到内部的 query_ollama 函数 ---
         elif params['type']=='chat':
-            # 异步处理聊天请求
-            async def chat_task():
-                # 从 Ollama 获取响应
-                llm_response_text = await query_ollama(params['text'])
-                # 检查会话是否仍然存在
-                if sessionid in nerfreals:
-                    # 将响应文本发送到虚拟人进行处理和播报
-                    nerfreals[sessionid].put_msg_txt(llm_response_text)
-                else:
-                    logger.warning(f"会话 {sessionid} 在 LLM 响应后已关闭。")
-            
-            # 创建一个后台任务来执行聊天逻辑，避免阻塞当前请求
-            asyncio.create_task(chat_task())               
+            asyncio.get_event_loop().run_in_executor(None, llm_response, params['text'],nerfreals[sessionid])                 
 
         return web.Response(
             content_type="application/json",

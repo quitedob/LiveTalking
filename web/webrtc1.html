@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebRTC 虚拟人交互</title>
+    <style>
+        :root {
+            --background-color: #f0f2f5;
+            --card-background-color: #ffffff;
+            --primary-color: #007aff;
+            --primary-hover-color: #005bb5;
+            --secondary-color: #e5e5ea;
+            --secondary-hover-color: #dcdcdc;
+            --text-color: #1d1d1f;
+            --border-color: #d1d1d6;
+            --red-color: #ff3b30;
+            --green-color: #34c759;
+            --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            font-family: var(--font-family);
+            background-color: var(--background-color);
+            color: var(--text-color);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            padding: 20px;
+            box-sizing: border-box;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 700px;
+            background-color: var(--card-background-color);
+            border-radius: 20px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            padding: 24px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        h2 {
+            text-align: center;
+            margin: 0 0 10px 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .video-container {
+            width: 100%;
+            background-color: #000;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        #video {
+            width: 100%;
+            display: block;
+        }
+
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+
+        button {
+            font-family: var(--font-family);
+            padding: 12px 18px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+        
+        button:active {
+            transform: scale(0.98);
+        }
+        
+        button:disabled {
+            background-color: var(--secondary-color);
+            cursor: not-allowed;
+            color: #8e8e93;
+        }
+
+        .btn-primary {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        .btn-primary:not(:disabled):hover {
+            background-color: var(--primary-hover-color);
+        }
+
+        .btn-secondary {
+            background-color: var(--secondary-color);
+            color: var(--text-color);
+        }
+        .btn-secondary:not(:disabled):hover {
+            background-color: var(--secondary-hover-color);
+        }
+        
+        .btn-danger {
+            background-color: var(--red-color);
+            color: white;
+        }
+
+        .btn-recording {
+            background-color: var(--red-color);
+            color: white;
+        }
+        
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        
+        textarea {
+            font-family: var(--font-family);
+            width: 100%;
+            height: 60px;
+            padding: 10px;
+            border-radius: 10px;
+            border: 1px solid var(--border-color);
+            font-size: 16px;
+            resize: vertical;
+            box-sizing: border-box;
+        }
+
+        #stop, #stop-record {
+            display: none;
+        }
+        
+        .status-light {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: var(--red-color);
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0.7); }
+            70% { box-shadow: 0 0 0 10px rgba(255, 59, 48, 0); }
+            100% { box-shadow: 0 0 0 0 rgba(255, 59, 48, 0); }
+        }
+
+    </style>
+</head>
+<body>
+
+<input id="use-stun" type="checkbox" style="display: none;" checked/>
+<input type="hidden" id="sessionid" value="">
+
+<div class="container">
+    <h2>虚拟人实时交互</h2>
+    
+    <div class="video-container">
+        <video id="video" autoplay="true" playsinline="true"></video>
+        <div id="recording-indicator" class="status-light" style="display: none;"></div>
+    </div>
+    <audio id="audio" autoplay="true" style="display:none;"></audio>
+
+    <div class="controls">
+        <button id="start" class="btn-primary">开始连接</button>
+        <button id="stop" class="btn-danger">断开连接</button>
+    </div>
+
+    <form id="text-chat-form" class="form-group">
+        <textarea id="message" placeholder="输入文本，让虚拟人说话...">测试文本</textarea>
+        <button type="submit" class="btn-primary">发送文本</button>
+    </form>
+    
+    <div class="controls">
+        <button id="start-record" class="btn-secondary">开始录音</button>
+        <button id="stop-record" class="btn-recording">停止录音</button>
+    </div>
+</div>
+
+<script src="client.js"></script>
+<script type="text/javascript">
+    // --- 录音功能相关变量 ---
+    let mediaRecorder;
+    let audioChunks = [];
+    let session_id = null; // 用于存储会话ID
+    let checkSessionInterval = null; // 用于轮询检查 sessionid 的计时器
+
+    // --- DOM 元素获取 ---
+    const startButton = document.getElementById('start');
+    const stopButton = document.getElementById('stop');
+    const startRecordButton = document.getElementById('start-record');
+    const stopRecordButton = document.getElementById('stop-record');
+    const textChatForm = document.getElementById('text-chat-form');
+    const messageInput = document.getElementById('message');
+    const recordingIndicator = document.getElementById('recording-indicator');
+    const textChatButton = document.querySelector('#text-chat-form button');
+    const sessionInput = document.getElementById('sessionid'); // 获取隐藏输入框
+    
+    // --- 页面加载时初始化按钮状态 ---
+    function initializeUI() {
+        startRecordButton.disabled = true;
+        textChatButton.disabled = true;
+        stopButton.style.display = 'none';
+        startButton.style.display = 'block';
+        startButton.disabled = false;
+        messageInput.value = "你好，请介绍一下你自己。";
+    }
+    initializeUI();
+
+    // --- 关键改动2：重写事件监听器以直接调用 client.js 函数 ---
+    startButton.addEventListener('click', () => {
+        console.log("尝试开始连接...");
+        startButton.disabled = true; // 防止重复点击
+        startButton.textContent = '连接中...';
+
+        // 直接调用 client.js 的 start 函数，不进行任何包装
+        window.start();
+
+        // 设置一个计时器，轮询检查隐藏输入框中是否已填入 sessionid
+        let attempts = 0;
+        const maxAttempts = 20; // 最多检查10秒 (20 * 500ms)
+        checkSessionInterval = setInterval(() => {
+            attempts++;
+            // 检查 sessionid 是否有值
+            if (sessionInput.value && sessionInput.value !== "0") {
+                clearInterval(checkSessionInterval); // 停止轮询
+                session_id = parseInt(sessionInput.value, 10);
+                console.log('连接成功，Session ID:', session_id);
+                
+                // 更新UI
+                startButton.style.display = 'none';
+                stopButton.style.display = 'block';
+                startButton.textContent = '开始连接'; // 恢复文本
+
+                // 启用交互按钮
+                startRecordButton.disabled = false;
+                textChatButton.disabled = false;
+            } else if (attempts > maxAttempts) {
+                // 如果超时仍未获取到 sessionid，则认为连接失败
+                clearInterval(checkSessionInterval);
+                console.error('连接超时，未能获取 Session ID。');
+                alert('连接失败，请检查浏览器控制台或刷新页面重试。');
+                initializeUI(); // 恢复初始UI状态
+            }
+        }, 500); // 每500毫秒检查一次
+    });
+    
+    stopButton.addEventListener('click', () => {
+        // 直接调用 client.js 的 stop 函数
+        if(window.stop) window.stop();
+
+        console.log('连接已断开。');
+        session_id = null;
+        sessionInput.value = ""; // 清空隐藏输入框
+        if(checkSessionInterval) clearInterval(checkSessionInterval); // 确保轮询已停止
+
+        // 更新UI
+        initializeUI();
+        
+        // 如果正在录音，也一并停止
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+        resetRecordingUI();
+    });
+
+    startRecordButton.addEventListener('click', () => {
+        if (!session_id) {
+            alert('请先点击“开始连接”建立会话！');
+            return;
+        }
+        startRecording();
+    });
+
+    stopRecordButton.addEventListener('click', () => {
+        if (mediaRecorder && mediaRecorder.state !== "inactive") {
+            mediaRecorder.stop();
+        }
+    });
+
+    textChatForm.addEventListener('submit', (event) => {
+        event.preventDefault();
+        if (!session_id) {
+            alert('请先点击“开始连接”建立会话！');
+            return;
+        }
+        const text = messageInput.value.trim();
+        if (text) {
+            sendTextToHuman(text);
+        }
+    });
+
+    // --- 功能函数 (录音和文本发送) ---
+    // 这部分函数无需修改，因为它们依赖的 session_id 变量现在能被正确赋值
+    async function startRecording() {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            mediaRecorder = new MediaRecorder(stream);
+            
+            mediaRecorder.ondataavailable = event => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = sendAudioToServer;
+            mediaRecorder.start();
+
+            // 更新UI
+            startRecordButton.style.display = 'none';
+            stopRecordButton.style.display = 'block';
+            stopRecordButton.textContent = '正在录音... (点击停止)';
+            recordingIndicator.style.display = 'block';
+
+        } catch (error) {
+            console.error('获取麦克风权限失败:', error);
+            alert('无法访问麦克风。请检查浏览器权限设置。');
+        }
+    }
+
+    async function sendAudioToServer() {
+        if (audioChunks.length === 0) {
+            console.warn("没有录制到音频数据。");
+            resetRecordingUI();
+            return;
+        }
+        
+        stopRecordButton.textContent = '正在发送...';
+        stopRecordButton.disabled = true;
+
+        const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+        const audioFile = new File([audioBlob], "recording.wav", { type: 'audio/wav' });
+        
+        const formData = new FormData();
+        formData.append('file', audioFile);
+        formData.append('sessionid', session_id);
+
+        try {
+            // 使用新增的 /audio_chat 接口
+            const response = await fetch('/audio_chat', {
+                method: 'POST',
+                body: formData
+            });
+
+            if (!response.ok) throw new Error(`服务器响应错误: ${response.statusText}`);
+            const result = await response.json();
+            console.log('后端响应:', result);
+
+        } catch (error) {
+            console.error('发送音频失败:', error);
+            alert('音频发送失败，请查看控制台获取更多信息。');
+        } finally {
+            resetRecordingUI();
+        }
+    }
+    
+    async function sendTextToHuman(text) {
+        try {
+            // 使用 /human 接口发送文本
+            const response = await fetch('/human', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    sessionid: session_id,
+                    type: 'chat', // 使用chat模式以调用LLM
+                    text: text,
+                    interrupt: true
+                })
+            });
+            if (!response.ok) throw new Error(`服务器响应错误: ${response.statusText}`);
+            const result = await response.json();
+            console.log('文本发送成功，后端响应:', result);
+
+        } catch (error) {
+            console.error('发送文本失败:', error);
+            alert('文本发送失败，请查看控制台。');
+        }
+    }
+
+    function resetRecordingUI() {
+        audioChunks = [];
+        startRecordButton.style.display = 'block';
+        stopRecordButton.style.display = 'none';
+        stopRecordButton.textContent = '停止录音';
+        if(session_id) startRecordButton.disabled = false; // 只有在连接时才启用
+        stopRecordButton.disabled = false;
+        recordingIndicator.style.display = 'none';
+    }
+
+</script>
+</body>
+</html>
