@@ -498,7 +498,7 @@ if __name__ == '__main__':
 
     # 新增：Ollama 配置参数
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434/api/chat', help="Ollama聊天API的URL")
-    parser.add_argument('--ollama-model', type=str, default='gemma3:1b', help="在Ollama中使用的模型名称")
+    parser.add_argument('--ollama-model', type=str, default='deepseek-r1:8b', help="在Ollama中使用的模型名称")
     parser.add_argument('--ollama-system-prompt', type=str, default='你是AI数字人，请你简短回复，禁止输出表情符号。/nothink', help="给Ollama模型的系统提示")
     
     opt = parser.parse_args()

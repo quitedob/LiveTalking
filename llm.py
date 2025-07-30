@@ -43,7 +43,7 @@ class LLMClient:
     @staticmethod
     def _clean(text: str) -> str:
         """
-        简化注释：清洗LLM返回的文本，移除思考标签。
+        简化注释：清洗LLM返回的文本，移除思考标签和多余标点。
         - text: 原始文本。
         - 返回: 清洗后的文本。
         """
@@ -51,6 +51,8 @@ class LLMClient:
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.S)
         # ② 删除 /nothink 等残留
         text = re.sub(r"/nothink", "", text, flags=re.I)
+        # ③ 移除除中文、字母、数字、空格、逗号、句号外的所有符号
+        text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9，。.,]', '', text)
         return text.strip()
 
     async def ask(self, prompt: str) -> str:

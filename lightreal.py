@@ -221,7 +221,7 @@ class LightReal(BaseReal):
         audio_processor = model
         self.model,self.frame_list_cycle,self.face_list_cycle,self.coord_list_cycle = avatar
 
-        self.asr = HubertASR(opt,self,audio_processor)
+        self.asr = HubertASR(opt,self,audio_processor, audio_feat_length=[12,12])
         self.asr.warm_up()
         #self.__warm_up()
         
