@@ -1,3 +1,4 @@
+# app.py
 # 导入必要的库
 from flask import Flask, render_template,send_from_directory,request, jsonify
 from flask_sockets import Sockets
@@ -32,6 +33,9 @@ from funasr.utils.postprocess_utils import rich_transcription_postprocess
 import tempfile
 import os
 
+# 新增：从 llm.py 导入 LLMClient
+from llm import LLMClient
+
 
 app = Flask(__name__)
 nerfreals:Dict[int, BaseReal] = {} # sessionid:BaseReal
@@ -39,6 +43,7 @@ opt = None
 model = None
 avatar = None
 asr_model = None # 新增：ASR 模型全局变量
+llm_client = None # 新增：LLM 客户端全局变量
 
 
 ##### webrtc ###############################
@@ -60,8 +65,8 @@ def build_nerfreal(sessionid:int)->BaseReal:
         from musereal import MuseReal
         nerfreal = MuseReal(opt,model,avatar)
     elif opt.model == 'ernerf':
-    #     from nerfreal import NeRFReal
-    #     nerfreal = NeRFReal(opt,model,avatar)
+    #     from nerfreal import NeRFReal
+    #     nerfreal = NeRFReal(opt,model,avatar)
         pass
     elif opt.model == 'ultralight':
         from lightreal import LightReal
@@ -166,7 +171,8 @@ async def human(request):
             nerfreals[sessionid].put_msg_txt(params['text'])
         elif params['type']=='chat':
             async def chat_task():
-                llm_response_text = await query_ollama(params['text'])
+                # --- 核心改动：调用 llm_client.ask ---
+                llm_response_text = await llm_client.ask(params['text'])
                 if sessionid in nerfreals:
                     nerfreals[sessionid].put_msg_txt(llm_response_text)
                 else:
@@ -357,35 +363,7 @@ async def transcribe_audio(audio_bytes: bytes) -> str:
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# 新增：Ollama 查询函数
-async def query_ollama(text_prompt: str) -> str:
-    """
-    异步查询 Ollama LLM 服务并返回文本响应。
-    """
-    payload = {
-        "model": opt.ollama_model,
-        "stream": False,
-        "messages": [
-            {"role": "system", "content": opt.ollama_system_prompt},
-            {"role": "user", "content": text_prompt}
-        ]
-    }
-    
-    try:
-        async with aiohttp.ClientSession() as session:
-            async with session.post(opt.ollama_url, json=payload, timeout=60) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    llm_response_text = data.get("message", {}).get("content", "")
-                    logger.info(f"Ollama response: {llm_response_text}")
-                    return llm_response_text
-                else:
-                    error_text = await response.text()
-                    logger.error(f"Ollama API request failed with status {response.status}: {error_text}")
-                    return "抱歉，我暂时无法回答。"
-    except Exception as e:
-        logger.error(f"Error connecting to Ollama service: {e}")
-        return "抱歉，连接语言模型服务时出现问题。"
+# --- 核心改动：删除旧的 query_ollama 函数 ---
 
 # 新增：定义新的语音聊天端点
 async def audio_chat(request):
@@ -420,7 +398,8 @@ async def audio_chat(request):
             )
 
         # 2. 文本送入 LLM
-        llm_response_text = await query_ollama(transcribed_text)
+        # --- 核心改动：调用 llm_client.ask ---
+        llm_response_text = await llm_client.ask(transcribed_text)
 
         # 3. LLM 响应送入虚拟人 TTS
         nerfreal_session = nerfreals.get(sessionid)
@@ -524,6 +503,13 @@ if __name__ == '__main__':
     
     opt = parser.parse_args()
     
+    # --- 核心改动：初始化 LLMClient ---
+    llm_client = LLMClient(
+        url=opt.ollama_url,
+        model=opt.ollama_model,
+        system_prompt=opt.ollama_system_prompt
+    )
+
     # 加载自定义动作配置
     opt.customopt = []
     if opt.customvideo_config!='':
