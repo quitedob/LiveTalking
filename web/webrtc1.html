@@ -229,7 +229,7 @@
 
         // 设置一个计时器，轮询检查隐藏输入框中是否已填入 sessionid
         let attempts = 0;
-        const maxAttempts = 20; // 最多检查10秒 (20 * 500ms)
+        const maxAttempts = 400; // 最多检查10秒 (20 * 500ms)
         checkSessionInterval = setInterval(() => {
             attempts++;
             // 检查 sessionid 是否有值
