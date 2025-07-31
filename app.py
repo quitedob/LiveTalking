@@ -9,6 +9,7 @@ import re
 import numpy as np
 from threading import Thread,Event
 import torch.multiprocessing as mp
+import time
 
 from aiohttp import web
 import aiohttp
@@ -149,22 +150,29 @@ async def human(request):
         if params['type'] == 'echo':
             nerfreals[sessionid].put_msg_txt(params['text'])
         elif params['type'] == 'chat':
-            # --- 核心修复：流式处理LLM响应 ---
+            # --- 核心修改：恢复旧版行为，收集完整文本后一次性发送给TTS ---
             async def stream_llm_to_tts():
-                """简化注释：异步任务，将LLM的流式响应实时送入TTS"""
+                """简化注释：收集LLM完整响应，然后一次性发送至TTS，以优化性能和语速"""
                 try:
-                    # 简化注释：使用异步for循环处理来自llm_client.ask的文本块
+                    # 1. 异步收集所有文本块
+                    response_chunks = []
                     async for text_chunk in llm_client.ask(params['text']):
-                        if sessionid in nerfreals:
-                            # 简化注释：将收到的文本块送入虚拟人进行语音合成
-                            nerfreals[sessionid].put_msg_txt(text_chunk)
-                        else:
+                        if sessionid not in nerfreals:
                             logger.warning(f"会话 {sessionid} 在接收LLM响应时已关闭，中断任务。")
-                            break # 简化注释：如果会话关闭，则退出循环
+                            return
+                        response_chunks.append(text_chunk)
+                    
+                    # 2. 合并成一个完整的字符串
+                    full_response = "".join(response_chunks)
+
+                    # 3. 将完整文本一次性放入TTS队列
+                    if full_response and sessionid in nerfreals:
+                        nerfreals[sessionid].put_msg_txt(full_response)
+
                 except Exception as e:
                     logger.error(f"stream_llm_to_tts 任务执行出错 (会话 {sessionid}): {e}")
 
-            # 简化注释：创建后台任务处理流式响应，立即返回HTTP响应，不阻塞
+            # 简化注释：创建后台任务，不阻塞HTTP响应
             asyncio.create_task(stream_llm_to_tts())
 
         return web.Response(
@@ -284,19 +292,29 @@ async def audio_chat(request):
         if not transcribed_text:
             return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg": "ASR未能识别出文本。"}))
 
-        # --- 核心修复：流式处理LLM响应 ---
+        # --- 核心修改：恢复旧版行为，收集完整文本后一次性发送给TTS ---
         async def stream_llm_to_tts():
-            """简化注释：异步任务，将LLM的流式响应实时送入TTS"""
+            """简化注释：收集LLM完整响应，然后一次性发送至TTS，以优化性能和语速"""
             try:
+                # 1. 异步收集所有文本块
+                response_chunks = []
                 async for text_chunk in llm_client.ask(transcribed_text):
-                    if sessionid in nerfreals:
-                        nerfreals[sessionid].put_msg_txt(text_chunk)
-                    else:
+                    if sessionid not in nerfreals:
                         logger.warning(f"会话 {sessionid} 在接收LLM响应时已关闭，中断任务。")
-                        break
+                        return
+                    response_chunks.append(text_chunk)
+
+                # 2. 合并成一个完整的字符串
+                full_response = "".join(response_chunks)
+
+                # 3. 将完整文本一次性放入TTS队列
+                if full_response and sessionid in nerfreals:
+                    nerfreals[sessionid].put_msg_txt(full_response)
+            
             except Exception as e:
                 logger.error(f"audio_chat->stream_llm_to_tts 任务出错 (会话 {sessionid}): {e}")
 
+        # 简化注释：创建后台任务，不阻塞HTTP响应
         asyncio.create_task(stream_llm_to_tts())
 
         return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg": "ok"}))
@@ -351,7 +369,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', type=int, default=10, help="滑动窗口右侧长度 (单位: 20ms)")
     parser.add_argument('--W', type=int, default=450, help="GUI 宽度")
     parser.add_argument('--H', type=int, default=450, help="GUI 高度")
-    parser.add_argument('--batch_size', type=int, default=1, help="推理批次大小, MuseTalk建议为1")
+    parser.add_argument('--batch_size', type=int, default=16, help="推理批次大小, MuseTalk建议为1")
     parser.add_argument('--customvideo_config', type=str, default='', help="自定义动作json配置文件")
     parser.add_argument('--tts', type=str, default='edgetts', help="TTS服务类型 (e.g., edgetts, xtts, gpt-sovits)")
     parser.add_argument('--REF_FILE', type=str, default="zh-CN-YunxiaNeural", help="TTS参考音频或说话人")
