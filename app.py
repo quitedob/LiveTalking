@@ -397,7 +397,7 @@ if __name__ == '__main__':
     # 简化注释：初始化 FunASR 模型
     logger.info('正在加载 FunASR 模型...')
     try:
-        asr_model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True, vad_model="fsmn-vad", vad_kwargs={"max_single_segment_time": 30000}, device="cuda:0" if torch.cuda.is_available() else "cpu")
+        asr_model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True, vad_model="fsmn-vad", disable_update=True, vad_kwargs={"max_single_segment_time": 30000}, device="cuda:0" if torch.cuda.is_available() else "cpu")
         logger.info('FunASR 模型加载成功。')
     except Exception as e:
         logger.error(f'加载 FunASR 模型失败: {e}')
