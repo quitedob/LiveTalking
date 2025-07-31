@@ -369,7 +369,7 @@ if __name__ == '__main__':
     parser.add_argument('-r', type=int, default=10, help="滑动窗口右侧长度 (单位: 20ms)")
     parser.add_argument('--W', type=int, default=450, help="GUI 宽度")
     parser.add_argument('--H', type=int, default=450, help="GUI 高度")
-    parser.add_argument('--batch_size', type=int, default=16, help="推理批次大小, MuseTalk建议为1")
+    parser.add_argument('--batch_size', type=int, default=32, help="推理批次大小, MuseTalk建议为1")
     parser.add_argument('--customvideo_config', type=str, default='', help="自定义动作json配置文件")
     parser.add_argument('--tts', type=str, default='edgetts', help="TTS服务类型 (e.g., edgetts, xtts, gpt-sovits)")
     parser.add_argument('--REF_FILE', type=str, default="zh-CN-YunxiaNeural", help="TTS参考音频或说话人")
@@ -382,8 +382,8 @@ if __name__ == '__main__':
     parser.add_argument('--max_session', type=int, default=1, help="最大会话数")
     parser.add_argument('--listenport', type=int, default=8010, help="Web服务监听端口")
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434/api/chat', help="Ollama聊天API的URL")
-    parser.add_argument('--ollama-model', type=str, default='gemma3:1b', help="在Ollama中使用的模型名称")
-    parser.add_argument('--ollama-system-prompt', type=str, default='你是AI数字人，请你简短回复，禁止输出表情符号。/nothink', help="给Ollama模型的系统提示")
+    parser.add_argument('--ollama-model', type=str, default='gemma3:12b', help="在Ollama中使用的模型名称")
+    parser.add_argument('--ollama-system-prompt', type=str, default='你是芝麻编程的老师，请你简短回复并严格按照芝麻编程老师的身份回答问题，禁止输出表情符号。/nothink', help="给Ollama模型的系统提示")
     opt = parser.parse_args()
 
     # 简化注释：初始化 LLM 客户端
