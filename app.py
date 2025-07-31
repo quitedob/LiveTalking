@@ -345,7 +345,7 @@ if __name__ == '__main__':
 
     parser = argparse.ArgumentParser()
     # --- 参数定义部分保持不变 ---
-    parser.add_argument('--fps', type=int, default=25, help="视频帧率")
+    parser.add_argument('--fps', type=int, default=50, help="视频帧率")
     parser.add_argument('-l', type=int, default=10, help="滑动窗口左侧长度 (单位: 20ms)")
     parser.add_argument('-m', type=int, default=8, help="滑动窗口中间长度 (单位: 20ms)")
     parser.add_argument('-r', type=int, default=10, help="滑动窗口右侧长度 (单位: 20ms)")
