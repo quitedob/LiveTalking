@@ -4,7 +4,7 @@ from flask import Flask, render_template,send_from_directory,request, jsonify
 from flask_sockets import Sockets
 import base64
 import json
-from functools import partial # 新增：导入 partial 以便包装函数调用
+from functools import partial # 简化注释：导入 partial 用于包装函数
 import re
 import numpy as np
 from threading import Thread,Event
@@ -27,36 +27,34 @@ from typing import Dict
 from logger import logger
 import gc
 
-# 新增：添加 FunASR 和其他必要的导入
+# 简化注释：从 funasr 和 llm 模块导入必要的类和函数
 from funasr import AutoModel
 from funasr.utils.postprocess_utils import rich_transcription_postprocess
 import tempfile
 import os
-
-# 新增：从 llm.py 导入 LLMClient
 from llm import LLMClient
 
 
 app = Flask(__name__)
-nerfreals:Dict[int, BaseReal] = {} # sessionid:BaseReal
+nerfreals:Dict[int, BaseReal] = {} # 简化注释：存储会话ID与虚拟人实例的映射
 opt = None
 model = None
 avatar = None
-asr_model = None # 新增：ASR 模型全局变量
-llm_client = None # 新增：LLM 客户端全局变量
+asr_model = None # 简化注释：ASR模型实例
+llm_client = None # 简化注释：LLM客户端实例
 
 
 ##### webrtc ###############################
 pcs = set()
 
 def randN(N)->int:
-    '''生成长度为 N的随机数 '''
-    min = pow(10, N - 1)
-    max = pow(10, N)
-    return random.randint(min, max - 1)
+    '''简化注释：生成一个指定长度的随机数'''
+    min_val = pow(10, N - 1)
+    max_val = pow(10, N)
+    return random.randint(min_val, max_val - 1)
 
 def build_nerfreal(sessionid:int)->BaseReal:
-    """根据命令行参数构建并返回一个虚拟人实例"""
+    """简化注释：根据配置构建并返回一个虚拟人实例"""
     opt.sessionid=sessionid
     if opt.model == 'wav2lip':
         from lipreal import LipReal
@@ -65,412 +63,288 @@ def build_nerfreal(sessionid:int)->BaseReal:
         from musereal import MuseReal
         nerfreal = MuseReal(opt,model,avatar)
     elif opt.model == 'ernerf':
-    #     from nerfreal import NeRFReal
-    #     nerfreal = NeRFReal(opt,model,avatar)
-        pass
+        pass # ernerf 模型暂未实现
     elif opt.model == 'ultralight':
         from lightreal import LightReal
         nerfreal = LightReal(opt,model,avatar)
     return nerfreal
 
 async def offer(request):
-    """处理 WebRTC offer 请求，建立点对点连接"""
+    """简化注释：处理WebRTC的offer请求，建立P2P连接"""
     params = await request.json()
-    offer = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
+    offer_desc = RTCSessionDescription(sdp=params["sdp"], type=params["type"])
 
     sessionid = randN(6)
     nerfreals[sessionid] = None
-    logger.info('sessionid=%d, session num=%d',sessionid,len(nerfreals))
-    
-    # --- 合并修改：遵从用户要求，使用指定的 STUN 服务器 ---
-    ice_servers = [
-        RTCIceServer(urls="stun:stun.miwifi.com:3478"),
-    ]
+    logger.info('创建会话 sessionid=%d, 当前会话数=%d',sessionid,len(nerfreals))
+
+    ice_servers = [RTCIceServer(urls="stun:stun.miwifi.com:3478")]
     pc = RTCPeerConnection(configuration=RTCConfiguration(iceServers=ice_servers))
-    
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        """连接状态改变时的回调函数"""
-        logger.info("Connection state is %s" % pc.connectionState)
-        # --- 关键修改：保留更健壮的状态处理和资源清理逻辑 ---
+        """简化注释：处理连接状态变化，自动清理断开的会话"""
+        logger.info("连接状态变为: %s", pc.connectionState)
         if pc.connectionState in ["failed", "closed", "disconnected"]:
             if sessionid in nerfreals:
-                logger.info(f"Closing session {sessionid} due to connection state: {pc.connectionState}")
-                # 安全地删除会话实例
+                logger.info(f"因连接状态为 {pc.connectionState}，正在关闭会话 {sessionid}")
                 session_to_close = nerfreals.pop(sessionid, None)
                 if session_to_close:
                     del session_to_close
-                gc.collect() # 执行垃圾回收
+                gc.collect()
             if pc in pcs:
                 await pc.close()
                 pcs.discard(pc)
 
-    # 异步构建虚拟人实例，避免阻塞
-    logger.info(f"Session {sessionid}: Starting to build NeRFReal instance...")
-    nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal,sessionid)
-    logger.info(f"Session {sessionid}: NeRFReal instance built.")
-    
-    # 检查会话是否因连接失败而提前关闭
+    logger.info(f"会话 {sessionid}: 开始构建虚拟人实例...")
+    nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal, sessionid)
+    logger.info(f"会话 {sessionid}: 虚拟人实例构建完成。")
+
     if sessionid not in nerfreals:
-        logger.warning(f"Session {sessionid} was closed before NeRFReal instance was ready.")
+        logger.warning(f"会话 {sessionid} 在实例准备好之前已关闭。")
         return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps({"code": -1, "msg": "Connection failed during setup"}),
+            content_type="application/json", status=500,
+            text=json.dumps({"code": -1, "msg": "连接在设置过程中失败"})
         )
     nerfreals[sessionid] = nerfreal
 
     player = HumanPlayer(nerfreals[sessionid])
     pc.addTrack(player.audio)
     pc.addTrack(player.video)
-    
-    # --- 关键修复：放宽视频编解码器偏好以提高兼容性 ---
+
+    # 简化注释：设置视频编解码器偏好，提高兼容性
     try:
         capabilities = RTCRtpSender.getCapabilities("video")
         if capabilities and capabilities.codecs:
-            # 优先选择 H264，但同时保留 VP8 作为备选方案，增加连接成功率
             preferences = [codec for codec in capabilities.codecs if 'H264' in codec.mimeType]
             preferences += [codec for codec in capabilities.codecs if 'VP8' in codec.mimeType]
-            
             video_transceiver = next((t for t in pc.getTransceivers() if t.sender and t.sender.track and t.sender.track.kind == "video"), None)
-            
             if video_transceiver and preferences:
                 video_transceiver.setCodecPreferences(preferences)
-                logger.info("Successfully set video codec preferences to H264 and VP8.")
-            else:
-                logger.warning("Could not find video transceiver or suitable codecs to set preferences.")
+                logger.info("成功设置视频编解码器偏好为 H264 和 VP8。")
     except Exception as e:
-        logger.warning(f"An error occurred while setting codec preferences: {e}")
+        logger.warning(f"设置编解码器偏好时出错: {e}")
 
-    await pc.setRemoteDescription(offer)
+    await pc.setRemoteDescription(offer_desc)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
 
     return web.Response(
         content_type="application/json",
-        text=json.dumps(
-            {"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "sessionid":sessionid}
-        ),
+        text=json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type, "sessionid": sessionid})
     )
 
 async def human(request):
-    """处理文本输入，用于驱动虚拟人（echo 或 chat 模式）"""
+    """简化注释：处理文本输入，驱动虚拟人进行交谈或复述"""
     try:
         params = await request.json()
-
         sessionid = int(params.get('sessionid', 0))
         if not sessionid or sessionid not in nerfreals:
-            raise ValueError("Invalid or expired sessionid")
+            raise ValueError("无效或已过期的 sessionid")
 
         if params.get('interrupt'):
             nerfreals[sessionid].flush_talk()
 
-        if params['type']=='echo':
+        if params['type'] == 'echo':
             nerfreals[sessionid].put_msg_txt(params['text'])
-        elif params['type']=='chat':
-            async def chat_task():
-                # --- 核心改动：调用 llm_client.ask ---
-                llm_response_text = await llm_client.ask(params['text'])
-                if sessionid in nerfreals:
-                    nerfreals[sessionid].put_msg_txt(llm_response_text)
-                else:
-                    logger.warning(f"会话 {sessionid} 在 LLM 响应后已关闭。")
-            
-            asyncio.create_task(chat_task())
+        elif params['type'] == 'chat':
+            # --- 核心修复：流式处理LLM响应 ---
+            async def stream_llm_to_tts():
+                """简化注释：异步任务，将LLM的流式响应实时送入TTS"""
+                try:
+                    # 简化注释：使用异步for循环处理来自llm_client.ask的文本块
+                    async for text_chunk in llm_client.ask(params['text']):
+                        if sessionid in nerfreals:
+                            # 简化注释：将收到的文本块送入虚拟人进行语音合成
+                            nerfreals[sessionid].put_msg_txt(text_chunk)
+                        else:
+                            logger.warning(f"会话 {sessionid} 在接收LLM响应时已关闭，中断任务。")
+                            break # 简化注释：如果会话关闭，则退出循环
+                except Exception as e:
+                    logger.error(f"stream_llm_to_tts 任务执行出错 (会话 {sessionid}): {e}")
+
+            # 简化注释：创建后台任务处理流式响应，立即返回HTTP响应，不阻塞
+            asyncio.create_task(stream_llm_to_tts())
 
         return web.Response(
             content_type="application/json",
-            text=json.dumps(
-                {"code": 0, "msg":"ok"}
-            ),
+            text=json.dumps({"code": 0, "msg": "ok"})
         )
     except Exception as e:
-        logger.exception('exception:')
+        logger.exception('human接口异常:')
         return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps(
-                {"code": -1, "msg": str(e)}
-            ),
+            content_type="application/json", status=500,
+            text=json.dumps({"code": -1, "msg": str(e)})
         )
 
 async def interrupt_talk(request):
-    """中断当前虚拟人的播报"""
+    """简化注释：中断虚拟人当前的语音播报"""
     try:
         params = await request.json()
-        sessionid = int(params.get('sessionid',0))
+        sessionid = int(params.get('sessionid', 0))
         if sessionid in nerfreals:
             nerfreals[sessionid].flush_talk()
-        
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {"code": 0, "msg":"ok"}
-            ),
-        )
+        return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg":"ok"}))
     except Exception as e:
-        logger.exception('exception:')
-        return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps(
-                {"code": -1, "msg": str(e)}
-            ),
-        )
+        logger.exception('interrupt_talk接口异常:')
+        return web.Response(content_type="application/json", status=500, text=json.dumps({"code": -1, "msg": str(e)}))
 
 async def humanaudio(request):
-    """处理音频文件上传，用于驱动虚拟人"""
+    """简化注释：处理上传的音频文件，驱动虚拟人"""
     try:
-        form= await request.post()
-        sessionid = int(form.get('sessionid',0))
+        form = await request.post()
+        sessionid = int(form.get('sessionid', 0))
         if sessionid in nerfreals:
             fileobj = form["file"]
-            filebytes=fileobj.file.read()
+            filebytes = fileobj.file.read()
             nerfreals[sessionid].put_audio_file(filebytes)
-
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {"code": 0, "msg":"ok"}
-            ),
-        )
+        return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg":"ok"}))
     except Exception as e:
-        logger.exception('exception:')
-        return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps(
-                {"code": -1, "msg": str(e)}
-            ),
-        )
+        logger.exception('humanaudio接口异常:')
+        return web.Response(content_type="application/json", status=500, text=json.dumps({"code": -1, "msg": str(e)}))
 
 async def set_audiotype(request):
-    """设置音频类型或重新初始化"""
+    """简化注释：设置音频类型或重新初始化虚拟人状态"""
     try:
         params = await request.json()
-        sessionid = int(params.get('sessionid',0))
+        sessionid = int(params.get('sessionid', 0))
         if sessionid in nerfreals:
-            nerfreals[sessionid].set_custom_state(params['audiotype'],params['reinit'])
-
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {"code": 0, "msg":"ok"}
-            ),
-        )
+            nerfreals[sessionid].set_custom_state(params['audiotype'], params['reinit'])
+        return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg":"ok"}))
     except Exception as e:
-        logger.exception('exception:')
-        return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps(
-                {"code": -1, "msg": str(e)}
-            ),
-        )
+        logger.exception('set_audiotype接口异常:')
+        return web.Response(content_type="application/json", status=500, text=json.dumps({"code": -1, "msg": str(e)}))
 
 async def record(request):
-    """控制录制开始和结束"""
+    """简化注释：控制录制功能的开始和结束"""
     try:
         params = await request.json()
-        sessionid = int(params.get('sessionid',0))
+        sessionid = int(params.get('sessionid', 0))
         if sessionid in nerfreals:
-            if params['type']=='start_record':
+            if params['type'] == 'start_record':
                 nerfreals[sessionid].start_recording()
-            elif params['type']=='end_record':
+            elif params['type'] == 'end_record':
                 nerfreals[sessionid].stop_recording()
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps(
-                {"code": 0, "msg":"ok"}
-            ),
-        )
+        return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg":"ok"}))
     except Exception as e:
-        logger.exception('exception:')
-        return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps(
-                {"code": -1, "msg": str(e)}
-            ),
-        )
+        logger.exception('record接口异常:')
+        return web.Response(content_type="application/json", status=500, text=json.dumps({"code": -1, "msg": str(e)}))
 
 async def is_speaking(request):
-    """查询虚拟人当前是否正在讲话"""
+    """简化注释：查询虚拟人当前是否正在讲话"""
     params = await request.json()
-    sessionid = int(params.get('sessionid',0))
-    speaking = False
-    if sessionid in nerfreals:
-        speaking = nerfreals[sessionid].is_speaking()
-    return web.Response(
-        content_type="application/json",
-        text=json.dumps(
-            {"code": 0, "data": speaking}
-        ),
-    )
+    sessionid = int(params.get('sessionid', 0))
+    speaking = nerfreals[sessionid].is_speaking() if sessionid in nerfreals else False
+    return web.Response(content_type="application/json", text=json.dumps({"code": 0, "data": speaking}))
 
-# --- 核心修复：替换为兼容新旧版 FunASR 的完整函数 ---
 async def transcribe_audio(audio_bytes: bytes) -> str:
-    """
-    将音频字节流转录为文本。
-    这是一个 I/O 和 CPU 密集型操作的混合体，因此使用临时文件和执行器。
-    它现在可以处理新版(>=1.0.3)FunASR返回的列表和旧版返回的字典。
-    """
+    """简化注释：将音频字节流通过FunASR转录为文本"""
     loop = asyncio.get_event_loop()
     tmp_path = None
     try:
-        # 创建一个带 .wav 后缀的临时文件
         with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
             tmp.write(audio_bytes)
             tmp_path = tmp.name
 
-        # 使用 functools.partial 将调用包装为关键字参数形式
-        generate_fn = partial(
-            asr_model.generate,
-            input=tmp_path,
-            cache={},
-            language="zn+en",
-            use_itn=True,
-            batch_size_s=60,
-            merge_vad=True,
-            merge_length_s=15
-        )
-
-        # 在后台线程中执行 ASR 函数
+        generate_fn = partial(asr_model.generate, input=tmp_path, cache={}, language="zn+en", use_itn=True, batch_size_s=60, merge_vad=True, merge_length_s=15)
         res = await loop.run_in_executor(None, generate_fn)
 
-        # 关键修复：兼容新版 list / 旧版 dict
-        # 如果返回的是列表，则取第一个元素；如果列表为空，则返回空字典
-        if isinstance(res, list):
-            res = res[0] if res else {}
+        # 简化注释：兼容新旧版FunASR的返回格式
+        res = res[0] if isinstance(res, list) and res else res if isinstance(res, dict) else {}
 
-        # 安全地获取文本并进行后处理
         text_raw = res.get("text", "")
         if text_raw:
             processed_text = rich_transcription_postprocess(text_raw)
             logger.info(f"ASR 转写结果: {processed_text}")
             return processed_text
-        else:
-            logger.warning("ASR 转写未返回任何文本。")
-            return ""
-
+        return ""
     except Exception as e:
-        logger.error(f"ASR 转写过程中发生错误: {e}")
+        logger.error(f"ASR转写出错: {e}")
         return ""
     finally:
-        # 确保清理临时文件
         if tmp_path and os.path.exists(tmp_path):
             os.remove(tmp_path)
 
-# --- 核心改动：删除旧的 query_ollama 函数 ---
-
-# 新增：定义新的语音聊天端点
 async def audio_chat(request):
-    """处理语音聊天请求：ASR -> LLM -> TTS"""
+    """简化注释：处理完整的语音聊天流程（ASR -> LLM -> TTS）"""
     try:
         form = await request.post()
         sessionid = int(form.get('sessionid', 0))
-        
         if not sessionid or sessionid not in nerfreals:
-            return web.Response(
-                content_type="application/json",
-                status=400,
-                text=json.dumps({"code": -1, "msg": "valid sessionid is required"}),
-            )
-        
+            return web.Response(content_type="application/json", status=400, text=json.dumps({"code": -1, "msg": "需要有效的sessionid"}))
+
         fileobj = form.get("file")
         if not fileobj:
-            return web.Response(
-                content_type="application/json",
-                status=400,
-                text=json.dumps({"code": -1, "msg": "audio file is required"}),
-            )
-            
+            return web.Response(content_type="application/json", status=400, text=json.dumps({"code": -1, "msg": "需要音频文件"}))
+
         audio_bytes = fileobj.file.read()
-        
-        # 1. 音频转文本 (ASR)
+
         transcribed_text = await transcribe_audio(audio_bytes)
         if not transcribed_text:
-            return web.Response(
-                content_type="application/json",
-                text=json.dumps({"code": 0, "msg": "ASR failed or produced no text."}),
-            )
+            return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg": "ASR未能识别出文本。"}))
 
-        # 2. 文本送入 LLM
-        # --- 核心改动：调用 llm_client.ask ---
-        llm_response_text = await llm_client.ask(transcribed_text)
+        # --- 核心修复：流式处理LLM响应 ---
+        async def stream_llm_to_tts():
+            """简化注释：异步任务，将LLM的流式响应实时送入TTS"""
+            try:
+                async for text_chunk in llm_client.ask(transcribed_text):
+                    if sessionid in nerfreals:
+                        nerfreals[sessionid].put_msg_txt(text_chunk)
+                    else:
+                        logger.warning(f"会话 {sessionid} 在接收LLM响应时已关闭，中断任务。")
+                        break
+            except Exception as e:
+                logger.error(f"audio_chat->stream_llm_to_tts 任务出错 (会话 {sessionid}): {e}")
 
-        # 3. LLM 响应送入虚拟人 TTS
-        nerfreal_session = nerfreals.get(sessionid)
-        if nerfreal_session:
-            nerfreal_session.put_msg_txt(llm_response_text)
-        else:
-            logger.error(f"Session {sessionid} not found in nerfreals after processing.")
+        asyncio.create_task(stream_llm_to_tts())
 
-        return web.Response(
-            content_type="application/json",
-            text=json.dumps({"code": 0, "msg": "ok"}),
-        )
+        return web.Response(content_type="application/json", text=json.dumps({"code": 0, "msg": "ok"}))
     except Exception as e:
-        logger.exception('Exception in /audio_chat:')
-        return web.Response(
-            content_type="application/json",
-            status=500,
-            text=json.dumps({"code": -1, "msg": str(e)}),
-        )
+        logger.exception('audio_chat接口异常:')
+        return web.Response(content_type="application/json", status=500, text=json.dumps({"code": -1, "msg": str(e)}))
 
 async def on_shutdown(app):
-    """服务器关闭时，清理所有 WebRTC 连接"""
-    # close peer connections
+    """简化注释：服务器关闭时，清理所有WebRTC连接"""
     coros = [pc.close() for pc in pcs]
     await asyncio.gather(*coros)
     pcs.clear()
 
 async def post(url,data):
-    """一个简单的异步 POST 请求函数"""
+    """简化注释：一个简单的异步POST请求函数"""
     try:
         async with aiohttp.ClientSession() as session:
-            async with session.post(url,data=data, timeout=30) as response:
+            async with session.post(url, data=data, timeout=30) as response:
                 return await response.text()
     except Exception as e:
-        logger.info(f'Error: {e}')
+        logger.info(f'POST请求错误: {e}')
 
-async def run(push_url,sessionid):
-    """为 rtcpush 模式运行一个独立的虚拟人会话"""
-    nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal,sessionid)
+async def run_push_session(push_url, sessionid):
+    """简化注释：为rtcpush模式运行一个独立的虚拟人会话"""
+    nerfreal = await asyncio.get_event_loop().run_in_executor(None, build_nerfreal, sessionid)
     nerfreals[sessionid] = nerfreal
-
     pc = RTCPeerConnection()
     pcs.add(pc)
-
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
-        logger.info("Connection state is %s" % pc.connectionState)
         if pc.connectionState == "failed":
             await pc.close()
             pcs.discard(pc)
-
     player = HumanPlayer(nerfreals[sessionid])
     pc.addTrack(player.audio)
     pc.addTrack(player.video)
-
     await pc.setLocalDescription(await pc.createOffer())
-    answer = await post(push_url,pc.localDescription.sdp)
-    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer,type='answer'))
-##########################################
+    answer_sdp = await post(push_url, pc.localDescription.sdp)
+    await pc.setRemoteDescription(RTCSessionDescription(sdp=answer_sdp, type='answer'))
 
 if __name__ == '__main__':
-    # 设置多进程启动方法为 'spawn'，以兼容不同平台
-    # 在Windows或macOS上，使用多进程时这通常是必须的
     try:
         mp.set_start_method('spawn')
     except RuntimeError:
         pass
-    
+
     parser = argparse.ArgumentParser()
-    
-    # --- 通用参数 ---
+    # --- 参数定义部分保持不变 ---
     parser.add_argument('--fps', type=int, default=25, help="视频帧率")
     parser.add_argument('-l', type=int, default=10, help="滑动窗口左侧长度 (单位: 20ms)")
     parser.add_argument('-m', type=int, default=8, help="滑动窗口中间长度 (单位: 20ms)")
@@ -479,92 +353,64 @@ if __name__ == '__main__':
     parser.add_argument('--H', type=int, default=450, help="GUI 高度")
     parser.add_argument('--batch_size', type=int, default=1, help="推理批次大小, MuseTalk建议为1")
     parser.add_argument('--customvideo_config', type=str, default='', help="自定义动作json配置文件")
-    
-    # --- TTS 相关参数 ---
     parser.add_argument('--tts', type=str, default='edgetts', help="TTS服务类型 (e.g., edgetts, xtts, gpt-sovits)")
     parser.add_argument('--REF_FILE', type=str, default="zh-CN-YunxiaNeural", help="TTS参考音频或说话人")
     parser.add_argument('--REF_TEXT', type=str, default=None, help="TTS参考文本")
     parser.add_argument('--TTS_SERVER', type=str, default='http://127.0.0.1:9880', help="TTS服务地址")
-
-    # --- 模型与传输参数 ---
     parser.add_argument('--model', type=str, default='musetalk', help="使用的模型 (musetalk, wav2lip, ultralight)")
     parser.add_argument('--avatar_id', type=str, default='avator_1', help="定义 data/avatars 中的形象ID")
     parser.add_argument('--transport', type=str, default='webrtc', help="传输模式 (webrtc, rtcpush, virtualcam)")
     parser.add_argument('--push_url', type=str, default='http://localhost:1985/rtc/v1/whip/?app=live&stream=livestream', help="rtcpush模式下的推流地址")
-    
-    # --- 服务器参数 ---
     parser.add_argument('--max_session', type=int, default=1, help="最大会话数")
     parser.add_argument('--listenport', type=int, default=8010, help="Web服务监听端口")
-
-    # 新增：Ollama 配置参数
     parser.add_argument('--ollama-url', type=str, default='http://localhost:11434/api/chat', help="Ollama聊天API的URL")
     parser.add_argument('--ollama-model', type=str, default='gemma3:1b', help="在Ollama中使用的模型名称")
     parser.add_argument('--ollama-system-prompt', type=str, default='你是AI数字人，请你简短回复，禁止输出表情符号。/nothink', help="给Ollama模型的系统提示")
-    
     opt = parser.parse_args()
-    
-    # --- 核心改动：初始化 LLMClient ---
-    llm_client = LLMClient(
-        url=opt.ollama_url,
-        model=opt.ollama_model,
-        system_prompt=opt.ollama_system_prompt
-    )
 
-    # 加载自定义动作配置
-    opt.customopt = []
-    if opt.customvideo_config!='':
-        with open(opt.customvideo_config,'r', encoding='utf-8') as file:
+    # 简化注释：初始化 LLM 客户端
+    llm_client = LLMClient(url=opt.ollama_url, model=opt.ollama_model, system_prompt=opt.ollama_system_prompt)
+
+    if opt.customvideo_config:
+        with open(opt.customvideo_config, 'r', encoding='utf-8') as file:
             opt.customopt = json.load(file)
+    else:
+        opt.customopt = []
 
-    # 根据选择加载不同的虚拟人模型
+    # --- 模型加载部分保持不变 ---
     if opt.model == 'musetalk':
         from musereal import MuseReal,load_model,load_avatar,warm_up
-        logger.info(opt)
         model = load_model()
-        avatar = load_avatar(opt.avatar_id) 
+        avatar = load_avatar(opt.avatar_id)
         warm_up(opt.batch_size,model)
     elif opt.model == 'wav2lip':
         from lipreal import LipReal,load_model,load_avatar,warm_up
-        logger.info(opt)
         model = load_model("./models/wav2lip.pth")
         avatar = load_avatar(opt.avatar_id)
         warm_up(opt.batch_size,model,256)
     elif opt.model == 'ultralight':
         from lightreal import LightReal,load_model,load_avatar,warm_up
-        logger.info(opt)
         model = load_model(opt)
         avatar = load_avatar(opt.avatar_id)
         warm_up(opt.batch_size,avatar,160)
-    
-    # 新增：初始化 FunASR 模型
-    logger.info('Loading FunASR model...')
-    try:
-        model_dir = "iic/SenseVoiceSmall"
-        asr_model = AutoModel(
-            model=model_dir,
-            trust_remote_code=True,
-            vad_model="fsmn-vad",
-            vad_kwargs={"max_single_segment_time": 30000},
-            device="cuda:0" if torch.cuda.is_available() else "cpu",
-        )
-        logger.info('FunASR model loaded successfully.')
-    except Exception as e:
-        logger.error(f'Failed to load FunASR model: {e}')
-        # exit(1) # 如果需要，可以在模型加载失败时退出
 
-    # 为 virtualcam 模式启动渲染线程
-    if opt.transport=='virtualcam':
+    # 简化注释：初始化 FunASR 模型
+    logger.info('正在加载 FunASR 模型...')
+    try:
+        asr_model = AutoModel(model="iic/SenseVoiceSmall", trust_remote_code=True, vad_model="fsmn-vad", vad_kwargs={"max_single_segment_time": 30000}, device="cuda:0" if torch.cuda.is_available() else "cpu")
+        logger.info('FunASR 模型加载成功。')
+    except Exception as e:
+        logger.error(f'加载 FunASR 模型失败: {e}')
+
+    if opt.transport == 'virtualcam':
         thread_quit = Event()
         nerfreals[0] = build_nerfreal(0)
-        rendthrd = Thread(target=nerfreals[0].render,args=(thread_quit,))
+        rendthrd = Thread(target=nerfreals[0].render, args=(thread_quit,))
         rendthrd.start()
 
-    #############################################################################
-    # 设置 aiohttp 应用
-    appasync = web.Application(client_max_size=1024**2*100) # 允许最大100MB的请求体
+    # --- aiohttp 应用设置和路由注册 ---
+    appasync = web.Application(client_max_size=1024**2*100)
     appasync.on_shutdown.append(on_shutdown)
-    
-    # 注册所有API路由
     appasync.router.add_post("/offer", offer)
     appasync.router.add_post("/human", human)
     appasync.router.add_post("/humanaudio", humanaudio)
@@ -572,54 +418,38 @@ if __name__ == '__main__':
     appasync.router.add_post("/record", record)
     appasync.router.add_post("/interrupt_talk", interrupt_talk)
     appasync.router.add_post("/is_speaking", is_speaking)
-    appasync.router.add_post("/audio_chat", audio_chat) # 新增：注册语音聊天路由
-    appasync.router.add_static('/',path='web') # 提供静态文件服务
+    appasync.router.add_post("/audio_chat", audio_chat) # 简化注释：注册语音聊天路由
+    appasync.router.add_static('/', path='web')
 
-    # 配置CORS，允许跨域请求
-    cors = aiohttp_cors.setup(appasync, defaults={
-            "*": aiohttp_cors.ResourceOptions(
-                    allow_credentials=True,
-                    expose_headers="*",
-                    allow_headers="*",
-                )
-        })
+    cors = aiohttp_cors.setup(appasync, defaults={"*": aiohttp_cors.ResourceOptions(allow_credentials=True, expose_headers="*", allow_headers="*")})
     for route in list(appasync.router.routes()):
         cors.add(route)
 
-    # 根据传输模式决定默认页面
-    pagename='webrtcapi.html'
-    if opt.transport=='rtmp':
-        pagename='echoapi.html'
-    elif opt.transport=='rtcpush':
-        pagename='rtcpushapi.html'
-    
-    logger.info('Start http server; http://<serverip>:'+str(opt.listenport)+'/'+pagename)
-    logger.info('推荐访问webrtc集成前端: http://<serverip>:'+str(opt.listenport)+'/dashboard.html')
-    
-    # 启动服务器的函数
+    pagename = 'webrtcapi.html'
+    if opt.transport == 'rtmp': pagename = 'echoapi.html'
+    elif opt.transport == 'rtcpush': pagename = 'rtcpushapi.html'
+
+    logger.info(f'HTTP服务器已启动; http://<serverip>:{opt.listenport}/{pagename}')
+    logger.info(f'推荐访问WebRTC集成前端: http://<serverip>:{opt.listenport}/dashboard.html')
+
     def run_server(runner):
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         loop.run_until_complete(runner.setup())
         site = web.TCPSite(runner, '0.0.0.0', opt.listenport)
         loop.run_until_complete(site.start())
-        
-        # 如果是 rtcpush 模式，提前创建会话
-        if opt.transport=='rtcpush':
+
+        if opt.transport == 'rtcpush':
             for k in range(opt.max_session):
-                push_url = opt.push_url
-                if k!=0:
-                    push_url = opt.push_url+str(k)
-                loop.run_until_complete(run(push_url,k))
-                
+                push_url = opt.push_url + (str(k) if k != 0 else "")
+                loop.run_until_complete(run_push_session(push_url, k))
+
         try:
             loop.run_forever()
         except KeyboardInterrupt:
             pass
         finally:
-            # 清理工作
-            logger.info("Shutting down server...")
-            # 可以添加其他清理任务
-            
+            logger.info("正在关闭服务器...")
+
     runner = web.AppRunner(appasync)
     run_server(runner)

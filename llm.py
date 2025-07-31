@@ -3,13 +3,14 @@ import aiohttp
 import asyncio
 import re
 import logging
+import json
 
 # 简化注释：获取日志记录器
 logger = logging.getLogger(__name__)
 
 class LLMClient:
     """
-    简化注释：用于与大语言模型（如Ollama）交互的客户端。
+    简化注释：用于与大语言模型（如Ollama）交互的客户端，支持流式响应。
     """
     def __init__(self, url, model, system_prompt):
         """
@@ -18,28 +19,41 @@ class LLMClient:
         - model: 使用的模型名称。
         - system_prompt: 发送给模型的系统级提示。
         """
-        self.url, self.model, self.system_prompt = url, model, system_prompt
+        self.url = url
+        self.model = model
+        self.system_prompt = system_prompt
+        self.history = []
 
-    async def _call_raw(self, prompt: str, timeout=60) -> str:
+    async def _call_raw_stream(self, prompt: str, timeout=60):
         """
-        简化注释：向LLM服务发送原始请求并获取响应。
+        简化注释：向LLM服务发送流式请求并以异步生成器方式返回内容块。
         - prompt: 用户输入的提示。
         - timeout: 请求超时时间（秒）。
-        - 返回: LLM的原始文本响应。
+        - 返回: LLM响应内容的异步生成器。
         """
+        self.history.append({"role": "user", "content": prompt})
         payload = {
             "model": self.model,
-            "stream": False,
+            "stream": True,  # 关键修复：启用流式响应
             "messages": [
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user",   "content": prompt}
-            ]
+                {"role": "system", "content": self.system_prompt}
+            ] + self.history[-10:] # 保留最近10条历史记录
         }
+
         async with aiohttp.ClientSession() as sess:
             async with sess.post(self.url, json=payload, timeout=timeout) as r:
-                data = await r.json()
-                return data.get("message", {}).get("content", "")
-
+                async for line in r.content:
+                    if line:
+                        try:
+                            decoded_line = line.decode('utf-8').strip()
+                            if decoded_line:
+                                chunk = json.loads(decoded_line)
+                                if chunk.get("done") == False:
+                                     yield chunk.get("message", {}).get("content", "")
+                        except (json.JSONDecodeError, UnicodeDecodeError) as e:
+                            logger.warning(f"Failed to decode line: {line}, error: {e}")
+                            continue
+    
     @staticmethod
     def _clean(text: str) -> str:
         """
@@ -55,38 +69,64 @@ class LLMClient:
         text = re.sub(r'[^\u4e00-\u9fa5a-zA-Z0-9，。.,]', '', text)
         return text.strip()
 
-    async def ask(self, prompt: str) -> str:
+    async def ask(self, prompt: str):
         """
-        简化注释：向LLM提问并返回干净的、可播报的答案。
+        简化注释：以流式方式向LLM提问，并异步生成干净的、可播报的答案片段。
         - prompt: 用户输入的提示。
-        - 返回: 处理过的LLM响应或错误信息。
+        - 返回: 处理过的LLM响应文本片段的异步生成器。
         """
         try:
-            raw = await self._call_raw(prompt)
-            # 简化注释：如果清洗后为空，则返回省略号
-            return self._clean(raw) or "……"
+            buffer = ""
+            async for raw_chunk in self._call_raw_stream(prompt):
+                if raw_chunk:
+                    buffer += raw_chunk
+                    # 按句子结束符或换行符分割，确保推送完整的句子或段落
+                    while any(p in buffer for p in ['。', '！', '？', '...', '”', '\n']):
+                        # 找到第一个结束符的位置
+                        split_points = [buffer.find(p) for p in ['。', '！', '？', '...', '”', '\n'] if p in buffer]
+                        first_split_point = min(split_points) + 1
+                        
+                        sentence = buffer[:first_split_point]
+                        buffer = buffer[first_split_point:]
+                        
+                        cleaned_sentence = self._clean(sentence)
+                        if cleaned_sentence:
+                            yield cleaned_sentence
+
+            # 处理最后一个不含结束符的句子
+            if buffer:
+                cleaned_buffer = self._clean(buffer)
+                if cleaned_buffer:
+                    yield cleaned_buffer + "……" # 用省略号表示对话可能未完全结束
+                
         except Exception as e:
             logger.error("LLM 调用失败: %s", e)
-            return "抱歉，我暂时无法回答。"
+            yield "抱歉，我暂时无法回答。"
 
+# 保持 ask_llm 的同步封装，但需注意，它将把流式响应聚合为单个字符串，从而失去流式处理的优势。
+# 在需要真正实时响应的地方，应直接调用异步的 ask 方法。
 def ask_llm(prompt: str) -> str:
     """
     简化注释：为非异步代码提供一个同步的LLM调用封装。
+    注意：此函数会聚合所有流式响应，表现为阻塞行为。
     - prompt: 用户输入的提示。
-    - 返回: 处理过的LLM响应。
+    - 返回: 处理过的LLM完整响应。
     """
-    # 简化注释：在已有事件循环的情况下不能直接运行asyncio.run()
-    # 这里的实现仅为示例，实际应用中需根据主程序事件循环情况调整
+    async def _collect_stream():
+        response_parts = []
+        async for part in llm_client.ask(prompt):
+            response_parts.append(part)
+        return "".join(response_parts)
+
     try:
         loop = asyncio.get_running_loop()
         if loop.is_running():
-            # 简化注释：如果事件循环正在运行，则创建任务
-            task = loop.create_task(llm_client.ask(prompt))
-            # 简化注释：注意：此处的同步等待会阻塞当前异步函数，仅用于简单示例
-            # 实际应用中应避免在异步函数中这样调用
-            return asyncio.run(asyncio.sleep(0, task.result()))
+            task = loop.create_task(_collect_stream())
+            # 这是一个简单的同步等待实现，不建议在复杂的异步应用中使用
+            while not task.done():
+                loop.run_until_complete(asyncio.sleep(0.1))
+            return task.result()
         else:
-            return asyncio.run(llm_client.ask(prompt))
+            return asyncio.run(_collect_stream())
     except RuntimeError:
-        # 简化注释：如果没有正在运行的事件循环，则启动一个新的
-        return asyncio.run(llm_client.ask(prompt))
+        return asyncio.run(_collect_stream())

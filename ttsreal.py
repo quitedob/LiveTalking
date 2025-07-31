@@ -121,7 +121,7 @@ class EdgeTTS(BaseTTS):
     
     async def __main(self,voicename: str, text: str):
         try:
-            communicate = edge_tts.Communicate(text, voicename,rate="-10%")
+            communicate = edge_tts.Communicate(text, voicename)
 
             #with open(OUTPUT_FILE, "wb") as file:
             first = True
